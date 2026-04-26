@@ -505,14 +505,7 @@ body { padding-bottom: calc(80px + env(safe-area-inset-bottom)); }
 .role-sel:focus { outline: none; border-color: var(--brand); }
 .remove-member { width: 28px; height: 28px; border: none; background: none; color: var(--txt4); font-size: 18px; cursor: pointer; border-radius: 6px; display: flex; align-items: center; justify-content: center; }
 .remove-member:active { background: #fef2f2; color: var(--red); }
-.team-email { font-size: 12px; color: var(--txt3); margin-top: 2px; }
-.team-info { flex: 1; min-width: 0; }
-.team-pending { opacity: .65; border-style: dashed !important; }
-.pending-label { font-size: 11px; font-weight: 700; color: var(--accent-d); background: var(--accent-lt); padding: 2px 8px; border-radius: 20px; }
-.invite-row { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--border); background: var(--bg); flex-wrap: wrap; align-items: stretch; }
-.invite-row .new-cat-inp { min-width: 0; flex: 1 1 120px; }
-.invite-row .role-sel { flex: 1 1 140px; min-width: 0; }
-.invite-row .new-cat-add { flex-shrink: 0; white-space: nowrap; }
+.invite-row { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--border); background: var(--bg); }
 .partner-entry { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .partner-entry .inp { flex: 1; margin: 0; }
 .partner-entry-emoji { width: 40px; height: 40px; border: 1.5px solid var(--border); border-radius: var(--rs); background: var(--bg); display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; cursor: pointer; transition: border-color .15s; }
@@ -1445,17 +1438,8 @@ function setActiveCompany(co) {
   if (!co) return;
   activeCompany = co;
   localStorage.setItem('wb_active_company', JSON.stringify(co));
-  // Derive p1/p2 from partners array if not set as strings
-  let parsedPartners = [];
-  try {
-    if (Array.isArray(co.partners) && co.partners.length) {
-      parsedPartners = co.partners.filter(p => p.name && !p._internal);
-    } else if (typeof co.partners === 'string') {
-      parsedPartners = JSON.parse(co.partners || '[]').filter(p => p.name);
-    }
-  } catch(e) {}
-  const p1 = co.p1 || parsedPartners[0]?.name || 'Partner 1';
-  const p2 = co.p2 || parsedPartners[1]?.name || (parsedPartners.length > 1 ? parsedPartners[1].name : 'Partner 2');
+  const p1 = co.p1 || 'Partner 1';
+  const p2 = co.p2 || 'Partner 2';
   const curSym = co.currency === 'GBP' ? '£' : co.currency === 'USD' ? '$' : co.currency === 'EUR' ? '€' : '₹';
   document.getElementById('p1-lbl').textContent = p1;
   document.getElementById('p2-lbl').textContent = p2;
@@ -1465,9 +1449,7 @@ function setActiveCompany(co) {
   const slbl2 = document.getElementById('s-p2-lbl'); if(slbl2) slbl2.textContent = p2 + ' Total';
   document.getElementById('app-hdr-emoji').textContent = co.emoji || '💼';
   document.getElementById('app-hdr-name').textContent = co.name || 'WorkBills';
-  const partnerNames = parsedPartners.length
-    ? parsedPartners.slice(0, 3).map(p => p.name).join(' & ')
-    : [co.p1, co.p2].filter(Boolean).join(' & ') || 'No partners yet';
+  const partnerNames = (co.partners && co.partners.length) ? co.partners.slice(0,3).map(p=>p.name).join(', ') : [co.p1, co.p2].filter(Boolean).join(' & ') || 'No partners';
   document.getElementById('app-hdr-sub').textContent = partnerNames + ' · ' + (co.currency||'INR');
   window._currSym = curSym; window._p1Name = p1; window._p2Name = p2;
 }
@@ -1619,34 +1601,12 @@ async function findUserCompany() {
     let roles = userRoles || [];
     
     if (roles.length === 0) {
-      // Fallback 1: check localStorage
       const localCompanies = JSON.parse(localStorage.getItem('wb_companies') || '[]');
       const matchedCo = localCompanies.find(c => c.ownerEmail?.toLowerCase() === currentUser.email.toLowerCase());
       if (matchedCo) roles = [{ company_id: matchedCo.id, role: 'owner' }];
     }
-
-    if (roles.length === 0) {
-      // Fallback 2: scan companies.partners jsonb for this email
-      // (handles pre-registered users who were added before ever logging in)
-      const { data: allCos } = await sbClient.from('companies').select('id, partners');
-      for (const co of (allCos || [])) {
-        let parts = [];
-        try { parts = Array.isArray(co.partners) ? co.partners : JSON.parse(co.partners || '[]'); } catch(e) {}
-        const hit = parts.find(p => p.email && p.email.toLowerCase() === currentUser.email.toLowerCase());
-        if (hit) {
-          roles.push({ company_id: co.id, role: hit.role || 'partner' });
-        }
-      }
-    }
-
-    if (roles.length === 0) return null;
-
-    // Upsert user record with real auth UUID (first-login linking)
-    for (const r of roles) {
-      await sbClient.from('users').upsert([{
-        id: currentUser.id, company_id: r.company_id, email: currentUser.email, role: r.role
-      }], { onConflict: 'id' }).catch(e => console.warn('User upsert:', e.message));
-    }
+    
+    if (roles.length === 0) return null; 
 
     let targetCompanyId = null;
     
@@ -2111,80 +2071,35 @@ async function rejectEntry(id) {
 
 async function loadTeam() {
   if (!ROLE.canManageTeam(currentUserRole)) return;
-  if (!activeCompany?.id) return;
   try {
-    // Fetch active members (those who have logged in — have a row in users table)
-    const [usersRes, coRes] = await Promise.all([
-      sbClient.from('users').select('*').eq('company_id', activeCompany.id).order('created_at', { ascending: true }),
-      sbClient.from('companies').select('partners').eq('id', activeCompany.id).single()
-    ]);
-
-    const activeMembers = usersRes.data || [];
-    const activeEmails  = new Set(activeMembers.map(u => (u.email || '').toLowerCase()));
-
-    // Parse partners from companies.partners jsonb
-    let allPartners = [];
-    try {
-      const raw = coRes.data?.partners;
-      allPartners = Array.isArray(raw) ? raw : (typeof raw === 'string' ? JSON.parse(raw || '[]') : []);
-    } catch(e) {}
-
-    // Pending = in partners array but NOT yet in users table (never logged in)
-    const pendingInvites = allPartners.filter(p =>
-      p.email && !activeEmails.has(p.email.toLowerCase()) && !p._internal
-    );
-
-    renderTeam(activeMembers, pendingInvites, allPartners);
-  } catch(e) { console.warn('loadTeam:', e.message); }
+    const { data, error } = await sbClient.from('users').select('*').eq('company_id', activeCompany.id).order('created_at', { ascending: true });
+    if (error) throw error;
+    renderTeam(data || []);
+  } catch(e) { }
 }
 
-function renderTeam(members, pendingInvites, allPartners) {
+function renderTeam(members) {
   const el = document.getElementById('team-list');
-  const colors = { owner: '#3a6652', partner: '#ea580c', employee: '#64748b' };
-
-  if (!members.length && !(pendingInvites || []).length) {
-    el.innerHTML = '<div class="empty-state"><div class="icon">👥</div><p>No team members yet.<br>Invite using the form below.</p></div>';
+  if (!members.length) {
+    el.innerHTML = '<div class="empty-state"><div class="icon">👥</div><p>No team members yet</p></div>';
     return;
   }
-
-  // ── Active members (in users table) ──────────────────────────────────────
-  const activeHtml = members.map(m => {
-    // Find partner name from allPartners if available
-    const partnerInfo = (allPartners || []).find(p => p.email && p.email.toLowerCase() === (m.email||'').toLowerCase());
-    const displayName = partnerInfo?.name || m.email || '—';
-    const isSelf = m.email === currentUser?.email;
-    return `
+  const colors = { owner: '#3a6652', partner: '#ea580c', employee: '#64748b' };
+  
+  el.innerHTML = members.map(m => `
     <div class="team-row">
-      <div class="team-av" style="background:${colors[m.role]||'#64748b'}">${displayName.charAt(0).toUpperCase()}</div>
+      <div class="team-av" style="background:${colors[m.role]||'#64748b'}">${(m.email||'?').charAt(0).toUpperCase()}</div>
       <div class="team-info">
-        <div class="team-name">${displayName}</div>
-        <div class="team-email">${m.email !== displayName ? m.email + ' · ' : ''}<span style="text-transform:capitalize;color:${colors[m.role]||'#64748b'};font-weight:700">${m.role||'employee'}</span> <span style="color:var(--green);font-size:10px">● Active</span></div>
+        <div class="team-name">${m.email || '—'}</div>
+        <div class="team-email" style="text-transform:capitalize">${m.role || 'employee'}</div>
       </div>
-      <select class="role-sel" onchange="updateMemberRole('${m.id}', this.value)" ${isSelf ? 'disabled' : ''}>
-        <option value="owner"    ${m.role==='owner'   ?'selected':''}>Owner</option>
-        <option value="partner"  ${m.role==='partner' ?'selected':''}>Partner</option>
+      <select class="role-sel" onchange="updateMemberRole('${m.id}', this.value)" ${m.email === currentUser.email ? 'disabled' : ''}>
+        <option value="owner" ${m.role==='owner'?'selected':''}>Owner</option>
+        <option value="partner" ${m.role==='partner'?'selected':''}>Partner</option>
         <option value="employee" ${m.role==='employee'?'selected':''}>Employee</option>
       </select>
-      ${!isSelf ? `<button class="remove-member" title="Remove member" onclick="removeMember('${m.id}')">×</button>` : ''}
-    </div>`;
-  }).join('');
-
-  // ── Pending invites (in partners array, not yet logged in) ────────────────
-  const pending = pendingInvites || [];
-  const pendingHtml = pending.length > 0
-    ? `<div style="padding:10px 18px 4px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.7px;color:var(--txt3);border-top:1px solid var(--border2)">
-         Pending Invites (${pending.length})
-       </div>` + pending.map(p => `
-    <div class="team-row team-pending">
-      <div class="team-av" style="background:#94a3b8">${(p.name||p.email||'?').charAt(0).toUpperCase()}</div>
-      <div class="team-info">
-        <div class="team-name">${p.name || p.email}</div>
-        <div class="team-email">${p.email} · <span style="text-transform:capitalize">${p.role||'employee'}</span> <span class="pending-label">⏳ Pending</span></div>
-      </div>
-      <button class="remove-member" title="Cancel invite" onclick="cancelInvite('${p.email}')">×</button>
-    </div>`).join('') : '';
-
-  el.innerHTML = activeHtml + pendingHtml;
+      ${m.email !== currentUser.email ? `<button class="remove-member" onclick="removeMember('${m.id}')">×</button>` : ''}
+    </div>`).join('');
 }
 
 async function updateMemberRole(userId, newRole) {
@@ -2204,40 +2119,15 @@ async function removeMember(userId) {
   } catch(e) { toast('Failed: ' + e.message); }
 }
 
-async function cancelInvite(email) {
-  if (!confirm('Cancel invite for ' + email + '?')) return;
-  try {
-    const { data: coData } = await sbClient.from('companies').select('partners').eq('id', activeCompany.id).single();
-    let parts = [];
-    try { parts = Array.isArray(coData?.partners) ? coData.partners : JSON.parse(coData?.partners || '[]'); } catch(e) {}
-    parts = parts.filter(p => (p.email || '').toLowerCase() !== email.toLowerCase());
-    const { error } = await sbClient.from('companies').update({ partners: parts }).eq('id', activeCompany.id);
-    if (error) throw error;
-    toast('Invite cancelled'); loadTeam();
-  } catch(e) { toast('Failed: ' + e.message); }
-}
-
 async function inviteMember() {
-  const emailRaw = document.getElementById('invite-email').value.trim();
-  const email    = emailRaw.toLowerCase();
-  const role     = document.getElementById('invite-role').value;
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast('Enter a valid email address'); return; }
-  if (!activeCompany?.id) return;
+  const email = document.getElementById('invite-email').value.trim();
+  const role  = document.getElementById('invite-role').value;
+  if (!email) { toast('Enter an email address'); return; }
   try {
-    // Fetch current partners array from DB
-    const { data: coData } = await sbClient.from('companies').select('partners').eq('id', activeCompany.id).single();
-    let parts = [];
-    try { parts = Array.isArray(coData?.partners) ? coData.partners : JSON.parse(coData?.partners || '[]'); } catch(e) {}
-
-    // Check for duplicate
-    if (parts.some(p => (p.email||'').toLowerCase() === email)) { toast(email + ' is already in the team'); return; }
-
-    // Add new invite to partners array
-    parts.push({ key: 'I' + Date.now().toString(36), name: emailRaw.split('@')[0], email, role, invited_at: new Date().toISOString() });
-    const { error } = await sbClient.from('companies').update({ partners: parts }).eq('id', activeCompany.id);
+    const { error } = await sbClient.from('users').insert([{ email, role, company_id: activeCompany.id }]);
     if (error) throw error;
     document.getElementById('invite-email').value = '';
-    toast('Invited ' + email + ' as ' + role + '. They will join when they sign in.'); loadTeam();
+    toast('✓ ' + email + ' added as ' + role); loadTeam();
   } catch(e) { toast('Failed: ' + e.message); }
 }
 
