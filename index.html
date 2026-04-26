@@ -747,9 +747,11 @@ body { padding-bottom: calc(80px + env(safe-area-inset-bottom)); }
       WorkBills
       <span style="font-size:9px;background:var(--accent);color:white;padding:2px 7px;border-radius:100px;font-weight:800;margin-left:4px">ADMIN</span>
     </div>
-    <div class="nav-actions">
-      <button class="nav-btn-ghost" onclick="showPage('page-home')">← Exit Admin</button>
+    <div class="nav-actions" style="gap:8px;align-items:center">
+      <span id="admin-logged-in-email" style="font-size:11px;color:var(--txt3);font-weight:600;padding:0 4px"></span>
+      <button class="nav-btn-ghost" onclick="showPage('page-home')">← Home</button>
       <button class="nav-btn-prim" onclick="showPage('page-register')">+ New Company</button>
+      <button class="nav-btn-ghost" onclick="logoutUser()" style="color:var(--red);border-color:#fecaca;font-weight:800">🚪 Sign Out</button>
     </div>
   </nav>
   <div class="admin-layout">
@@ -763,7 +765,8 @@ body { padding-bottom: calc(80px + env(safe-area-inset-bottom)); }
         <div class="sidebar-item"><span class="s-icon">🔒</span> Access Control</div>
         <div class="sidebar-item"><span class="s-icon">📋</span> Audit Log</div>
         <div class="sidebar-section-lbl" style="margin-top:12px">System</div>
-        <div class="sidebar-item" onclick="showPage('page-home')"><span class="s-icon">←</span> Exit Admin</div>
+        <div class="sidebar-item" onclick="showPage('page-home')"><span class="s-icon">←</span> Exit to Home</div>
+        <div class="sidebar-item" onclick="logoutUser()" style="color:#fca5a5"><span class="s-icon">🚪</span> Sign Out</div>
       </div>
     </aside>
     <main class="admin-main">
@@ -1103,6 +1106,18 @@ let companies = JSON.parse(localStorage.getItem(COMPANIES_KEY) || '[]');
 let activeCompany = JSON.parse(localStorage.getItem('wb_active_company') || 'null') || null;
 let newCompanySlug = '';
 
+
+function updateHomeNav() {
+  const signinBtn   = document.getElementById('home-signin-btn');
+  const adminBtn    = document.getElementById('home-admin-btn');
+  const signoutBtn  = document.getElementById('home-signout-btn');
+  if (!signinBtn) return;
+  const loggedIn = !!currentUser;
+  const isSuperAdmin = loggedIn && currentUser.email.trim().toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase();
+  signinBtn.style.display  = loggedIn ? 'none' : '';
+  adminBtn.style.display   = isSuperAdmin ? '' : 'none';
+  signoutBtn.style.display = loggedIn ? '' : 'none';
+}
 function showPage(id) {
   // Hide app panel when navigating to a .page
   document.getElementById('app').style.display = 'none';
@@ -1122,6 +1137,7 @@ function showPage(id) {
   if (el) el.classList.add('active');
 
   if (id === 'page-admin') loadAdminFromDB();
+  if (id === 'page-home') updateHomeNav();
 }
 
 function genSlug() {
@@ -1458,22 +1474,51 @@ async function loginGoogle() {
 }
 
 async function logoutUser() {
-  setSS('syncing','Signing out…');
+  // Guard: setSS only works when #app is visible
+  try { setSS('syncing','Signing out…'); } catch(e) {}
   await sbClient.auth.signOut().catch(() => {});
-  currentUser = null; _appShown = false; currentUserRole = 'owner'; entries = []; cCats = JSON.parse(localStorage.getItem(CATS_CACHE)||'[]'); editingId = null; activeMonthFilter = null; filterP = 'all'; summaryPeriod = 'all';
-  document.getElementById('app').style.display = 'none';
-  document.getElementById('user-menu').style.display = 'none';
-  document.getElementById('role-banner').className = 'role-banner';
-  const gBtn = document.getElementById('google-login-btn');
-  const spinner = document.getElementById('login-spinner');
-  if (gBtn) gBtn.style.display = 'flex';
-  if (spinner) spinner.classList.remove('show');
+  
+  // Reset all state
+  currentUser = null;
+  _appShown = false;
+  currentUserRole = 'owner';
+  entries = [];
+  cCats = JSON.parse(localStorage.getItem(CATS_CACHE)||'[]');
+  editingId = null;
+  activeMonthFilter = null;
+  filterP = 'all';
+  summaryPeriod = 'all';
+  userAllCompanies = [];
   activeCompany = null;
   localStorage.removeItem('wb_active_company');
+  localStorage.removeItem('wb_intended_slug');
+
+  // Hide app elements
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('user-menu').style.display = 'none';
+  const roleBanner = document.getElementById('role-banner');
+  if (roleBanner) roleBanner.className = 'role-banner';
+
+  // Reset login page to fresh state
+  const gBtn = document.getElementById('google-login-btn');
+  const spinner = document.getElementById('login-spinner');
+  const redirectCheck = document.getElementById('redirect-check');
+  if (gBtn) gBtn.style.display = 'flex';
+  if (spinner) spinner.classList.remove('show');
+  if (redirectCheck) redirectCheck.style.display = 'none';
+
+  // Clear admin email display
+  const adminEmailEl = document.getElementById('admin-logged-in-email');
+  if (adminEmailEl) adminEmailEl.textContent = '';
+
+  // Hide admin nav button
   const adminBtn = document.getElementById('admin-nav-btn');
   if (adminBtn) adminBtn.style.display = 'none';
+
+  // Navigate to home
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.getElementById('page-home').classList.add('active');
+  updateHomeNav();
 }
 
 async function showApp(user) {
@@ -1482,18 +1527,20 @@ async function showApp(user) {
   
   _appShown = true; 
   currentUser = user;
+  updateHomeNav();
 
   if (window.location.hash?.includes('access_token')) history.replaceState(null,'',window.location.pathname);
 
   if (user.email.trim().toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase()) {
-    // Show admin button, hide login spinners
     const adminBtn = document.getElementById('admin-nav-btn');
     if (adminBtn) adminBtn.style.display = 'inline-block';
     const loginSpinner = document.getElementById('login-spinner');
     if (loginSpinner) loginSpinner.classList.remove('show');
     const redirectCheck = document.getElementById('redirect-check');
     if (redirectCheck) redirectCheck.style.display = 'none';
-    // showPage handles hiding app, setting .active, and loading DB data
+    // Populate the email display in admin nav
+    const emailEl = document.getElementById('admin-logged-in-email');
+    if (emailEl) emailEl.textContent = user.email;
     showPage('page-admin');
     return;
   }
@@ -1615,7 +1662,14 @@ async function initAuth() {
       document.getElementById('google-login-btn').style.display = 'none';
       const { data, error } = await sbClient.auth.getSession();
       if (data?.session) { showApp(data.session.user); return; }
-    } catch(e) { console.error(e); }
+      // Session not found — restore login page
+      document.getElementById('login-spinner').classList.remove('show');
+      document.getElementById('google-login-btn').style.display = 'flex';
+    } catch(e) {
+      console.error(e);
+      document.getElementById('login-spinner').classList.remove('show');
+      document.getElementById('google-login-btn').style.display = 'flex';
+    }
   }
   try {
     const { data: { session } } = await sbClient.auth.getSession();
@@ -1627,10 +1681,12 @@ async function initAuth() {
       else currentUser = session.user;
     } else if (event==='SIGNED_OUT') {
       _appShown=false; currentUser=null; activeCompany=null;
+      userAllCompanies = [];
       localStorage.removeItem('wb_active_company');
       document.getElementById('app').style.display='none';
       document.getElementById('user-menu').style.display='none';
       const ab=document.getElementById('admin-nav-btn'); if(ab) ab.style.display='none';
+      updateHomeNav();
       showPage('page-home');
     }
   });
@@ -1763,14 +1819,14 @@ async function saveEntry() {
       if(editingId){toast('Go online to edit');btn.disabled=false;lbl.textContent='Update Entry';setSS('error','Offline');return;}
       offQ.push(dbRow); localStorage.setItem(OQ,JSON.stringify(offQ)); entries.unshift({...localRow,id:'loc_'+Date.now()}); setSS('error','Offline'); toast('Saved locally');
     }
-    ['f-person','f-desc','f-amt','f-notes'].forEach(id=>document.getElementById(id).value=''); document.getElementById('f-cat').value=''; editingId=null; document.getElementById('cancel-edit-btn').style.display='none'; document.getElementById('edit-mode-banner').classList.remove('show'); clearPhoto(); selPay('UPI'); buildSuggestions(); renderDash(); buildMonthChips();
+    ['f-person','f-desc','f-amt','f-notes'].forEach(id=>document.getElementById(id).value=''); document.getElementById('f-cat').value=''; editingId=null; document.getElementById('cancel-edit-btn').style.display='none'; document.getElementById('edit-mode-banner').classList.remove('show'); clearPhoto(); selPay('UPI'); buildSuggestions(); if(ROLE.canSeeDashboard(currentUserRole)) renderDash(); buildMonthChips();
   }catch(err){ setSS('error','Error'); toast('Save failed: '+err.message); }
   finally{ btn.disabled=false; if(!editingId) lbl.textContent='Save Entry'; }
 }
 
 function editEntry(id){
   const e=entries.find(x=>x.id===id); if(!e) return;
-  editingId=id; const p=e.date.split('/'); document.getElementById('f-date').value=`${p[2]}-${p[1]}-${p[0]}`; selPartner(e.partner); selPay(e.payMode||'UPI'); document.getElementById('f-person').value=e.person; document.getElementById('f-desc').value=e.description||''; document.getElementById('f-amt').value=e.amount; document.getElementById('f-cat').value=e.category; document.getElementById('f-notes').value=e.notes||''; existingPhotoUrl=e.photoUrl||null;
+  editingId=id; const p=e.date.split('/'); document.getElementById('f-date').value=`${p[2]}-${p[1]}-${p[0]}`; selPartner(e.partner || 'S'); selPay(e.payMode||'UPI'); document.getElementById('f-person').value=e.person; document.getElementById('f-desc').value=e.description||''; document.getElementById('f-amt').value=e.amount; document.getElementById('f-cat').value=e.category; document.getElementById('f-notes').value=e.notes||''; existingPhotoUrl=e.photoUrl||null;
   if(existingPhotoUrl){document.getElementById('preview-img').src=existingPhotoUrl;document.getElementById('photo-preview').style.display='block';}else clearPhoto();
   document.getElementById('save-lbl').textContent='Update Entry'; document.getElementById('cancel-edit-btn').style.display='block'; document.getElementById('edit-mode-banner').classList.add('show'); showPanel('add'); window.scrollTo(0,0);
 }
