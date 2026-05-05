@@ -5965,7 +5965,7 @@ function renderCR() {
   const cashAmt = dayEntries.filter(e => e.payMode === 'Cash').reduce((s, e) => s + e.amount, 0);
   const upiAmt  = dayEntries.filter(e => e.payMode !== 'Cash').reduce((s, e) => s + e.amount, 0);
 
-  // Count unique categories (excluding advance loans from totals)
+  // Count unique categories (excluding advance loans from totals)...
   const realEntries = dayEntries.filter(e => e.category !== 'Advance / Hand Loan');
   const realTotal = realEntries.reduce((s, e) => s + e.amount, 0);
   const uniqueCats = [...new Set(realEntries.map(e => e.category))];
